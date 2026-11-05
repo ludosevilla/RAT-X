@@ -48,6 +48,8 @@ These images were then reworked and manually modified.
 
 Everything else in the game — programming, sprites, tiles, visual elements and gameplay design — was created entirely by me (taking inspiration from the original game's graphic elements), without the use of AI.
 
+![RAT-X — A new game for Micro-8](https://raw.githubusercontent.com/ludosevilla/RATX-X/refs/heads/main/img/ratx.png)
+
 ---
 
 # Version française
