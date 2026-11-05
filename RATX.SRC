@@ -1,0 +1,1860 @@
+///////////////////////////////
+// RAT-X 
+//
+// Based on "Radar Rat Race" from 1982
+// (Commodore 64) and "Rally-X" 1980
+//
+// Game for Micro-8 computer
+// OS ver 0.9.0 minimum
+//
+// Jean-arthur Silve 2026
+// https://github.com/ludosevilla
+//
+// Music : Benoit Saint-Moulin
+// https://github.com/bsm3d
+//
+// License GNU GPL3
+// github.com/ludosevilla
+//
+///////////////////////////////
+
+/// Music code by Benoit Saint-Moulin
+/// from demo SIDRUSH
+
+byte _snd_song[34]={
+	0,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,1,2,3,4,5,6,
+	7,8,9,10,11,12,13,14,15,16};
+byte _snd_lead[272]={
+	0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,69,0,0,0,72,0,76,0,
+	81,0,0,0,79,0,76,0,77,0,0,0,0,0,76,0,72,0,0,0,69,0,0,0,
+	67,0,72,0,76,0,0,0,79,0,76,0,72,0,76,0,74,0,0,0,0,0,0,0,
+	71,0,0,0,67,0,0,0,69,0,69,0,72,0,76,0,81,0,0,0,0,0,83,0,
+	84,0,0,0,81,0,77,0,81,0,0,0,84,0,0,0,83,0,0,0,79,0,74,0,
+	79,0,81,0,83,0,0,0,80,0,0,0,0,0,0,0,76,0,0,0,71,0,0,0,
+	74,0,0,77,0,0,81,0,86,0,0,0,0,0,0,0,84,0,83,0,81,0,0,0,
+	76,0,0,0,81,0,0,0,77,0,79,0,81,0,77,0,74,0,0,0,77,0,0,0,
+	76,0,0,0,80,0,0,0,83,0,0,0,88,0,0,0,84,0,0,0,0,0,81,0,
+	77,0,0,0,0,0,81,0,83,0,0,0,0,0,79,0,74,0,0,0,71,0,0,0,
+	81,0,76,0,72,0,76,0,81,0,84,0,88,0,0,0,81,0,0,0,0,0,0,0,
+	0,0,0,0,1,0,0,0};
+byte _snd_barChord[17]={
+	0,0,1,2,3,0,1,3,4,5,0,5,4,1,3,0,0};
+byte _snd_chordBass[6]={
+	45,41,48,43,40,38};
+byte _snd_chordArp[18]={
+	9,12,16,5,9,12,0,4,7,7,11,14,4,8,11,2,5,9};
+byte _snd_bassPat[16]={
+	0,255,0,12,255,0,12,0,0,255,0,12,7,0,12,10};
+byte _snd_drumPat[16]={
+	1,255,9,255,4,255,9,1,1,255,9,255,4,255,9,11};
+byte _snd_fillPat[16]={
+	1,255,9,255,4,255,9,1,4,255,4,255,4,255,4,4};
+// digital synth frequency registers (0x1113/0x1114) for the notes 60..81
+// YM2612 block and fnum for the lead notes 67..88 (vibrato through ymSetReg)
+byte _snd_fmBlk[22]={
+	3,3,4,4,4,4,4,4,4,4,4,4,4,4,5,5,5,5,5,5,5,5};
+nat _snd_fmFn[22]={
+	1929,2044,1083,1147,1215,1288,1364,1445,1531,1622,1719,1821,1929,2044,1083,1147,1215,1288,1364,1445,1531,1622};
+byte _snd_sine[64]={
+	70,76,82,87,93,98,103,108,112,116,120,123,125,127,129,130,130,130,129,127,125,123,120,116,
+	112,108,103,98,93,87,82,76,70,64,58,53,47,42,37,32,28,24,20,17,15,13,11,10,
+	10,10,11,13,15,17,20,24,28,32,37,42,47,53,58,64};
+
+// ------------------------------------------------------------------ state
+byte _snd_SPEED=7;              // frames per row (59.92 Hz frames: 10 rows a second)
+int _snd_frame=0;
+int _snd_row=0;
+int _snd_pos=0;                 // position in song[]
+int _snd_bar=0;
+int _snd_chord=0;
+int _snd_arpStep=0;
+int _snd_leadNote=0;
+int _snd_leadAge=0;
+int _snd_vibDepth=0;
+int _snd_t=0;
+bool _snd_on=true;
+
+// ------------------------------------------------------------------ sound
+void _snd_setupSound() {
+	ymInit(0);
+	ymVol(127);
+	synInit(0);
+	ymLoad("res/bass01.ins",0);
+	ymLoad("res/lead02.ins",1);
+	ymVoice(0,0,5,0b11,112);
+	ymVoice(1,1,5,0b11,112);
+	synVoice(0,3,0,0b11,13);           // DPCM drums
+	synVoice(1,1,5,0b11,10);            // sawtooth arpeggio (octave 5: the note numbers are the real MIDI ones)
+	synEnv(1,0,5,9,15);              // fast release: the arp gate closes before each pitch change
+}
+
+
+void _snd_drum(int ins) {
+	synNoteOff(0);
+	synNoteOn(0,(byte)ins,128);
+}
+
+void _snd_bass(int note) {
+	ymNoteOff(0);
+	ymNoteOn(0,(byte)note,118);
+}
+
+void _snd_leadOn(int note) {
+	ymNoteOff(1);
+	ymNoteOn(1,(byte)note,118);
+	_snd_leadNote=note;
+	_snd_leadAge=0;
+	_snd_vibDepth=_snd_fmFn[note-67]/180;
+}
+
+void _snd_leadOff() {
+	ymNoteOff(1);
+	_snd_leadNote=0;
+}
+
+// the YM2612 channel 1 pitch registers (A5 = block and fnum high bits, then A1 = fnum low): the lead's vibrato
+void _snd_leadPitch(int dfn) {
+	int i=_snd_leadNote-67;
+	int fn=_snd_fmFn[i]+dfn;
+	int b=_snd_fmBlk[i];
+	int hiPart=fn/256;
+	int lo=fn-hiPart*256;
+	byte hi=(byte)(b*8+hiPart);
+	ymSetReg(0,0xA5,hi);
+	ymSetReg(0,0xA1,(byte)lo);
+}
+
+// the chord arpeggio: the next chord note each frame, envelope held
+void _snd_arpFrame() {
+	int k=_snd_chordArp[_snd_chord*3+_snd_arpStep];
+	synNoteOn(1,(byte)(k+60),100);
+	_snd_arpStep++;
+	if(_snd_arpStep>2) _snd_arpStep=0;
+	
+}
+
+void _snd_newChord() {
+	_snd_chord=_snd_barChord[_snd_bar];
+	_snd_arpStep=0;
+
+}
+
+void _snd_rowEvents() {
+	if(_snd_row==0) _snd_newChord();
+	int off=_snd_bassPat[_snd_row];
+	if(off!=255) _snd_bass(_snd_chordBass[_snd_chord]+off);
+	int d=_snd_drumPat[_snd_row];
+	if(_snd_bar==16) d=_snd_fillPat[_snd_row];
+	if(d!=255) _snd_drum(d);
+	int v=_snd_lead[_snd_bar*16+_snd_row];
+	if(v==1) _snd_leadOff();
+	else if(v>1) _snd_leadOn(v);
+}
+
+void _snd_tick() {
+	if(_snd_frame==0) _snd_rowEvents();
+	_snd_arpFrame();
+	if(_snd_leadNote>0) {
+		_snd_leadAge++;
+		if(_snd_leadAge>14) {                  // delayed vibrato, a triangle of 8 frames
+			int ph=_snd_leadAge%8;
+			int wob=ph;
+			if(ph>4) wob=8-ph;
+			_snd_leadPitch((wob-2)*_snd_vibDepth);
+		}
+	}
+	_snd_frame++;
+	if(_snd_frame>=_snd_SPEED) {
+		_snd_frame=0;
+		_snd_row++;
+		if(_snd_row>15) {
+			_snd_row=0;
+			_snd_pos++;
+			if(_snd_pos>=#_snd_song) _snd_pos=2;
+			_snd_bar=_snd_song[_snd_pos];
+		}
+	}
+}
+
+void _snd_play() {
+	if (!_snd_on) return;
+	_snd_tick();
+	_snd_t++;
+	if(_snd_t>=7680) _snd_t=0;                  // an int would turn negative after 9 minutes (and 7680 = 64 * 120: the sines keep their phase)
+		synNoteOff(1);                    // arp gate low for the rest of the frame: the next frame's pitch change happens in silence
+}
+
+
+
+
+////// End of music functions ///////
+
+////// CHARSET REDEFINITION
+
+bool importFont(text fileName,nat startIndex,nat glyphCount,nat destIndex) {
+    byte glyphData[15];
+    nat fileSize;
+    nat totalGlyphs;
+    nat fileOffset;
+    nat glyphBase;
+    nat byteIndex;
+    byte data;
+    byte bit;
+    byte pixel;
+
+    if(glyphCount==0 || destIndex>=256)
+        return false;
+
+    if(glyphCount>256-destIndex)
+        return false;
+
+    fOpen(0,fileName);
+    if(_fError!=0)
+        return false;
+
+    fileSize=fSize(0);
+
+    if(_fError!=0) {
+        fClose(0);
+        return false;
+    }
+
+    if(fileSize==0 || fileSize%15!=0) {
+        fClose(0);
+        return false;
+    }
+
+    totalGlyphs=fileSize/15;
+
+    if(startIndex>=totalGlyphs || glyphCount>totalGlyphs-startIndex) {
+        fClose(0);
+        return false;
+    }
+
+    for(nat i=0;i<glyphCount;i++) {
+
+        fileOffset=(startIndex+i)*15;
+        glyphBase=(destIndex+i)*120;
+
+        fRead(0,&glyphData,fileOffset,15);
+
+        if(_fError!=0) {
+            fClose(0);
+            return false;
+        }
+
+        for(byteIndex=0;byteIndex<15;byteIndex++) {
+            data=glyphData[byteIndex];
+
+            for(bit=0;bit<8;bit++) {
+                pixel=(byte)((data>>(7-bit))&1);
+                glyphSet(glyphBase+byteIndex*8+bit,pixel);
+            }
+        }
+    }
+
+    fClose(0);
+
+    if(_fError!=0)
+        return false;
+
+    return true;
+}
+
+///// End of charset redefinition 
+
+// Needed by tiles scrolling functions (below)
+nat gfxModes=0x2f00; //graphics modes register
+nat tilPal=0x1170; //tiles palette
+byte tilPage=0x00; //default page for tiles in XSRAM: 0x00000
+nat cpuWindow=0x3000; //default memory mapping (where the cpu sees XSRAM)
+nat tileBufferA=0x2b00; //hardware tile double buffers (draw and display)
+nat tileBufferB=0x2d00;
+nat statusReg=0x2f0b;
+nat tilXOffset=0x2f01;
+nat tilYOffset=0x2f02;
+
+//////////////////////////////////////
+
+nat sprPlaA=0x11d0;
+nat sprPlaB=0x2fa0; 
+byte sprPage=0x20; 
+byte bmpPageA=0x60;
+byte bmpPageB=0x8f;
+
+text i2t={10};
+text txt={15};
+
+/////////// MISC FUNCTIONS //////////////////
+
+void cls() {
+	memSet(0x1200,3200,32); //clear screen content
+	memSet(0x1e80,3200,1); //clear screen colors
+}
+
+void sleep(nat msec) {
+	clkSet();
+	while(_mSec<msec){
+		vSync();
+		_snd_play();
+		}
+}
+
+
+void int2Txt(nat val,byte n) {
+byte index;
+byte i;
+
+nat div=10;
+
+	for(i=0;i<(n-2);i++) 
+		div=div*10;
+	for(i=0;i<n;i++) {
+		index = 48+(byte)((val/div)%10);
+		poke(&i2t+i,index);
+		div/=10;
+	}
+	poke(&i2t+i,0);
+}
+
+void clearSprites() {
+	for (byte i=0;i<32;i++) {
+		sprPos(i,0,0);
+		sprFlip(i,false,false);
+		sprPrio(i,0);
+	}
+	sprUpdt();
+}
+
+void clearTiles(){
+	memSet(tileBufferA,512,0);//Clear tiles buffer A
+	memSet(tileBufferB,512,0);//Clear tiles buffer B
+}
+
+void clearTileSet(){
+	memSet(cpuWindow,32768,0,0);//Clear tileset
+}
+
+void clearBitMap(){
+	memSet(cpuWindow,48000,0,bmpPageA);
+	memSet(cpuWindow,48000,0,bmpPageB);
+}
+
+byte _padPreviousDir=255;
+byte _padKeep=false;
+
+byte getPadDirection(byte pad) {
+	bool right=(pad&128)!=0;
+	bool left=(pad&64)!=0;
+	bool down=(pad&32)!=0;
+	bool up=(pad&16)!=0;
+	byte dir=255;
+
+	if(up && right) {
+		if(_padKeep) { dir=_padPreviousDir;}
+		else { if(_padPreviousDir==0) dir=1; else dir=0;
+		_padKeep=true;}
+	} else if(right && down) {
+		if(_padKeep) { dir=_padPreviousDir;}
+		else { if(_padPreviousDir==1) dir=2; else dir=1;
+		_padKeep=true;}
+	} else if(down && left) {
+		if(_padKeep) { dir=_padPreviousDir;}
+		else { if(_padPreviousDir==2) dir=3; else dir=2;
+		_padKeep=true;}
+	} else if(left && up) {
+		if(_padKeep) { dir=_padPreviousDir;}
+		else { if(_padPreviousDir==3)  dir=0; else dir=3;
+		_padKeep=true;}
+	} else if(right) { dir=1; _padKeep=false;
+	} else if(down) { dir=2; _padKeep=false;
+	} else if(left) { dir=3; _padKeep=false;
+	} else if(up) { dir=0; _padKeep=false;}
+
+	if(dir!=255)
+		_padPreviousDir=dir;
+	return dir;
+}
+
+/////////////////////////////////////////
+//// TILES SCROLLING FUNCTIONS
+////////////////////////////////////////
+
+nat _tsMapW;
+nat _tsMapH;
+byte _tsWinW;
+byte _tsWinH;
+byte _tsWinX;
+byte _tsWinY;
+nat _tsDrawBuffer;
+nat _tsMapAddr;
+byte _tsMapPage;
+int _tsPixelOffsetX;
+int _tsPixelOffsetY;
+nat _tsTileOffsetX;
+nat _tsTileOffsetY;
+bool _tsUpdate;
+int _tsRetX; // Give the actual X scrolling performed
+int _tsRetY; // Give the actual Y scrolling performed
+
+text _tsTxtTemp={40};
+
+// Initialize scrolling
+void tsInit(byte winW,byte winH,byte winX, byte winY, text tileSetFile,text mapFile,nat mapAddr,byte mapPage) {
+	// winW : Width of visible screen (full screen:26)
+	// winH : Height of visible screen (full screen:16)
+	// winX : X pos of visible screen (0-25)
+	// winY : Y pos of visible screen (0-15)
+	// Tileset file (.tls) w/o extension
+	// if size=32816 : 48 first bytes are palette + 32768 bytes for tiles
+	// Otherwise: palette must be in .PAL file
+	// Map file (.lvl) is in the format generated by MAPED
+	// mapAddr : address where to be stored the map
+	// mapPage : address page location
+	
+	nat l;
+	
+	_tsTxtTemp="";
+	concat(_tsTxtTemp,tileSetFile);
+	concat(_tsTxtTemp,".TLS");
+	
+	fOpen(0,_tsTxtTemp);
+	l=fSize(0);
+	if (l==32816) {
+		fRead(0,tilPal,0,48);
+		fRead(0,cpuWindow,0,32768,tilPage);
+		fClose(0);
+	} else {
+		fRead(0,cpuWindow,0,l,tilPage);
+		fClose(0);
+		_tsTxtTemp="";
+		concat(_tsTxtTemp,tileSetFile);
+		concat(_tsTxtTemp,".PAL");
+		fOpen(0,_tsTxtTemp);
+		fRead(0,tilPal,0,48);
+		fClose(0);
+	}
+	
+	
+	import(mapFile,mapAddr,0,mapPage);
+	
+	_tsMapW=peekW(mapAddr,mapPage);
+	_tsMapH=peekW(mapAddr+2,mapPage);	
+	
+	_tsDrawBuffer=tileBufferB;
+	poke(statusReg,peek(statusReg) & 0b11111011);//display buffer A
+	
+	_tsMapAddr=mapAddr+4;
+	_tsMapPage=mapPage;
+
+	_tsPixelOffsetX=0;
+	_tsPixelOffsetY=0;
+	_tsTileOffsetX=0;
+	_tsTileOffsetY=0;
+	_tsWinW=winW;
+	_tsWinH=winH;
+	_tsWinX=winX;
+	_tsWinY=winY;
+		
+	_tsUpdate=false;
+}
+
+void _tsSwapTileBuffers()
+{
+	if(_tsDrawBuffer==tileBufferB) {
+		_tsDrawBuffer=tileBufferA;
+		poke(statusReg,peek(statusReg) | 0b00000100);//display buffer B
+	} else {
+		_tsDrawBuffer=tileBufferB;
+		poke(statusReg,peek(statusReg) & 0b11111011);//display buffer A
+	}
+}
+
+// Display the tiles for the first time
+// mapX: X pos from the map
+// mapY: Y pos from the map
+void tsDisplay(nat mapX,nat mapY) {
+	_tsTileOffsetX=mapX;
+	_tsTileOffsetY=mapY;
+
+	_tsPixelOffsetX=0;
+	_tsPixelOffsetY=0;
+	
+	poke(tilXOffset, (byte)_tsPixelOffsetX); //tile subpixel hardware scrolling
+	poke(tilYOffset, (byte)_tsPixelOffsetY);
+
+	areaCpy(_tsMapAddr,_tsMapW,mapX,mapY,_tsWinW,_tsWinH,_tsDrawBuffer,32,_tsWinX,_tsWinY,_tsMapPage);
+	_tsSwapTileBuffers();
+}
+
+
+// Scroll the tiles
+// direction:
+// 0-1-2-3: up-right-down-left
+// 4-5-6-7: up/right-down/right-down/left-down/up
+// speed: 1 to 32
+// Will update _tsRetX and _tsRetY
+void tsScroll(byte direction,byte speed) {
+	_tsRetX=_tsPixelOffsetX;
+	_tsRetY=_tsPixelOffsetY;
+
+	if (direction == 0 || direction == 4 || direction == 7) { // Up - up/right - up/left
+		_tsPixelOffsetY-=speed;
+	}
+	if (direction == 1 || direction == 4 || direction == 5) { // Right - up/right - down/right
+		_tsPixelOffsetX+=speed;
+
+	}
+	if (direction == 2 || direction == 5 || direction == 6) { // Down - down/right - down/left
+		_tsPixelOffsetY+=speed;
+	}
+	if (direction == 3 || direction == 6 || direction == 7) { // Left - down/left - up/left
+		_tsPixelOffsetX-=speed;
+	}
+	if(_tsPixelOffsetX>31) {
+		if (_tsTileOffsetX<(_tsMapW-_tsWinW)) {
+			_tsTileOffsetX++;
+			_tsPixelOffsetX=_tsPixelOffsetX-32;
+			_tsUpdate = true;
+			_tsRetX=speed;
+		} else {
+			_tsPixelOffsetX=31;
+			_tsRetX=31-_tsRetX;
+		}
+	} else if(_tsPixelOffsetX<0) {
+		if (_tsTileOffsetX>0) {
+			_tsTileOffsetX--;	
+			_tsPixelOffsetX=32+_tsPixelOffsetX;
+			_tsUpdate = true;
+			_tsRetX=-speed;
+		} else {
+			_tsPixelOffsetX=0;
+		}
+	} else
+		_tsRetX=_tsPixelOffsetX-_tsRetX;
+
+	if(_tsPixelOffsetY>31) {
+		if (_tsTileOffsetY<(_tsMapH-_tsWinH)) {
+			_tsTileOffsetY++;
+			_tsPixelOffsetY=_tsPixelOffsetY-32;
+			_tsUpdate = true;
+			_tsRetY=speed;
+		} else {
+			_tsPixelOffsetY=31;
+			_tsRetY=31-_tsRetY;
+		}
+	} else if(_tsPixelOffsetY<0) {
+		if (_tsTileOffsetY>0) {
+			_tsTileOffsetY--;
+
+			_tsPixelOffsetY=32+_tsPixelOffsetY;
+
+			_tsUpdate = true;
+			_tsRetY=-speed;
+		} else {
+			_tsPixelOffsetY=0;
+		}
+	} else 
+		_tsRetY=_tsPixelOffsetY-_tsRetY;
+}
+
+
+// To be called after vSync() to display scrolling
+void tsVSync() {
+	if(_tsUpdate)	{
+		areaCpy(_tsMapAddr,_tsMapW,_tsTileOffsetX,_tsTileOffsetY,_tsWinW,_tsWinH,_tsDrawBuffer,32,_tsWinX,_tsWinY,_tsMapPage);
+		if(_tsDrawBuffer==tileBufferB) {
+			_tsDrawBuffer=tileBufferA;
+			poke(statusReg,peek(statusReg) | 0b00000100);//display buffer B
+		} else {
+			_tsDrawBuffer=tileBufferB;
+			poke(statusReg,peek(statusReg) & 0b11111011);//display buffer A
+		}
+		_tsUpdate=false;
+	}
+	poke(tilXOffset, (byte)_tsPixelOffsetX); //tile subpixel hardware scrolling
+	poke(tilYOffset, (byte)_tsPixelOffsetY);	
+}
+
+
+//// APP VARS ////
+
+byte numCats;	// Number of cats
+byte numRock;	// Number of rocks
+byte numCheese;	// Number of cheese to get
+byte numDollar; // Number of bonus
+byte numRats;	// number of bad rats
+bool willMove;	// False if rats don't move (bonus level)
+bool drawMap;	// True: maze will be shown on radar map
+bool showCats;	// True: cats will be shown on radar map
+bool showCheese;	// True: cheeses will be shown on radar map
+byte bonusTime;	// Number of seconds of bonus
+byte playerSpeed; // Player speed
+byte ratSpeed; // Rats speed
+nat playTime; // Duration of the level
+
+byte numCheeseCatch; //Number of cheeses caught
+byte noMove;
+nat reverseChase; // time left to chase the rats
+bool noMusic;
+
+byte xoffs=15; // X pos of the laby top/left in the map
+byte yoffs=28; // Y pos of the laby top/left in the map
+nat score=0;
+nat nextPoints=100;
+int timer;
+byte level;
+byte lives;
+nat hiscore=0;
+nat lastPlMapX;
+nat lastPlMapY;
+
+/////////////////////////////////////////
+//// APP FUNCTIONS
+////////////////////////////////////////
+
+// Set element on the tile map
+void setElements(byte typ) {
+byte x;
+byte y;
+byte c;
+byte n;
+byte sp;
+nat a;
+byte i=0;
+
+	if (typ==0) { // Cats
+		n=numCats;
+		sp=27;
+	} else if (typ==1) { // Cheese
+		n=numCheese;
+	} else if (typ==2) { // Dollar
+		n=numDollar;
+		sp=23;
+	} else if (typ==3) { // rocks
+		n=numRock;
+		sp=22;
+	} else return;
+
+	while(i<n) {
+		x=rnd(1,30);
+		y=rnd(1,54);
+		if ((typ==0 || typ==3) && (x==15 && y>=44 && y<=68))
+			continue;
+		a=(nat)(_tsMapAddr+(yoffs+y)*64+xoffs+x);
+		c = peek(a,_tsMapPage);
+		if (c!=0)
+			continue;
+		if (typ==1) {
+			sp = rnd(20,26);
+			if (sp<24) sp=24;
+		}
+		poke(a,sp,_tsMapPage);
+		i++;
+	}
+}
+
+// "Star Screen" functions
+
+type tStar {
+	int X;
+	int Y;
+	nat time;
+};
+
+tStar stars[10];
+byte numStars;
+
+void starInit() {
+	numStars=0;
+	for(byte i=0;i<10;i++)
+		stars[i].X=-1;
+}
+
+void starPut() {
+	nat a;
+	byte i;
+	if (numStars==10) return;
+	for(i=0;i<10;i++) {
+		if (stars[i].X==-1) {
+			stars[i].X=_tsTileOffsetX;
+			stars[i].Y=_tsTileOffsetY;
+			stars[i].time=_time+rnd(10,15);
+			numStars++;
+			a=(nat)(_tsMapAddr+(_tsTileOffsetY+4)*64+_tsTileOffsetX+7);	
+			poke(a,28,_tsMapPage);
+			_tsUpdate=true;
+			return;
+		}
+	}
+}
+
+bool starLoop() {
+	byte i;
+	nat a;
+	for(i=0;i<10;i++) {
+		if (stars[i].X!=-1 && stars[i].time<_time) {
+			numStars--;
+			a=(nat)(_tsMapAddr+(stars[i].Y+4)*64+stars[i].X+7);	
+			poke(a,0,_tsMapPage);
+			_tsUpdate=true;
+			stars[i].X=-1;
+			return true;
+		}
+	}
+	return false;
+}
+
+
+
+
+// "Radar" map functions
+
+// "Rats" var are defined here because they are used in map functions
+type tRats {
+	byte sprId;
+	int mapX;
+	int mapY;
+	int nextMapX;
+	int nextMapY;
+	int X; // "raw" X sprite positon when map is at top left
+	int Y; // "raw" Y sprite position when map is at top left
+	int moveCnt;
+	byte noDir;
+	bool willMove;
+	nat lastRadarX;
+	nat lastRadarY;
+	byte lastRadarColor;
+	nat starRotate;
+	byte starStep;
+};
+
+// Max 8 rats (in fact 5 is a max)
+tRats rats[8];
+
+// Draw on the radar map, cats and cheeses
+// Rocks are never shown
+void mapDrawRadar() {
+byte x;
+byte y;
+
+byte c;
+
+	box(300+10,120-25,363+10,231-25,8);
+	for(y=0;y<56;y++) {
+		for(x=0;x<32;x++) {
+			c = peek((nat)(_tsMapAddr+(yoffs+y)*64+xoffs+x),_tsMapPage);
+			if (drawMap && (c>=1 && c<=16)) {
+				box(310+(x*2),95+(y*2),311+(x*2),96+(y*2),10);
+			} else if (showCats && c==27) {
+				box(310+(x*2),95+(y*2),311+(x*2),96+(y*2),13);
+			} else if (showCheese && c>=24 && c<=26) {
+				box(310+(x*2),95+(y*2),311+(x*2),96+(y*2),15);
+			}
+
+		}
+	}
+}
+
+
+// Get the picel color to use on the radar
+// according to what is on this place(x,y)
+byte mapGetColor(int x,int y) {
+// 0<=x<32
+// 0<=y<56
+byte c;
+byte color;
+	
+	if (x==13+(_tsTileOffsetX-23) && y==49+(_tsTileOffsetY-73)) // Joueur
+		return 14;
+	
+	for (byte id=0;id<8;id++) {
+		if (rats[id].mapX==x && rats[id].mapY==y) // rat
+			return 11;
+	}
+	
+	c = peek((nat)(_tsMapAddr+(yoffs+y)*64+xoffs+x),_tsMapPage);
+	if (drawMap && c>=1 && c<=16) {
+		return 10;
+	} else if (showCheese && c>=24 && c<=26) { // cheese
+		return 15;
+	} else if (showCats && c==27) { // Cat
+		return 13;
+	}
+	return 8;
+}
+
+
+void mapRemove(nat x,nat y) {
+byte c;
+	c=mapGetColor(x,y);
+	box(x,y,x+1,y+1,c);
+}
+
+void mapShowPlayer() {
+byte c;
+	int x;
+	int y;
+	
+	x=310+(_tsTileOffsetX-8)*2;
+	y=95+(_tsTileOffsetY-24)*2;
+
+	if (lastPlMapX!=10000) {
+		c=mapGetColor(lastPlMapX-8,lastPlMapY-24);
+		box(310+(lastPlMapX-8)*2,95+(lastPlMapY-24)*2,311+(lastPlMapX-8)*2,96+(lastPlMapY-24)*2,c);
+	}
+	box(x,y,x+1,y+1,14);
+	lastPlMapX=_tsTileOffsetX;
+	lastPlMapY=_tsTileOffsetY;
+}
+
+void mapRemoveRat(byte id) {
+byte c;
+nat x;
+nat y;
+	if (rats[id].mapX!=-1) {
+		x=310+((nat)rats[id].mapX)*2;
+		y=95+((nat)rats[id].mapY)*2;
+		rats[id].mapX=-1;
+		mapRemove(x,y);
+	}
+}
+
+void mapShowRat(byte id) {
+byte c;
+nat x;
+nat y;
+	x=310+((nat)rats[id].mapX)*2;
+	y=95+((nat)rats[id].mapY)*2;
+
+	if (rats[id].lastRadarX!=10000) {
+		c=mapGetColor(rats[id].lastRadarX,rats[id].lastRadarY);
+		box(310+(rats[id].lastRadarX)*2,95+(rats[id].lastRadarY)*2,311+(rats[id].lastRadarX)*2,96+(rats[id].lastRadarY)*2,c);
+	}
+
+	box(x,y,x+1,y+1,11);
+	rats[id].lastRadarX=(nat)rats[id].mapX;
+	rats[id].lastRadarY=(nat)rats[id].mapY;
+}
+
+
+
+// Rats functions
+
+
+void ratsInit() {
+	for(byte i=0;i<8;i++) {
+		rats[i].sprId=i;
+		rats[i].mapX=-1;
+		rats[i].moveCnt=0;
+		rats[i].X=-1;
+		rats[i].willMove=true;		
+		rats[i].lastRadarX=10000;
+		rats[i].starRotate=0;
+
+		sprRef(i,2);
+		sprFlip(i,false,false);
+		sprPos(i,0,0);
+	}
+}
+
+
+void _ratsDisplay() {
+	int ofsMapX;
+	int ofsMapY;
+	int posX;
+	int posY;
+
+	int pixelXOfs;
+	int pixelYOfs;
+	
+	ofsMapX = _tsTileOffsetX-8;
+	ofsMapY = _tsTileOffsetY-24;
+
+	pixelXOfs = (ofsMapX*32)-48+6+(int)peek(tilXOffset);
+	pixelYOfs = (ofsMapY*32)-42+6+(int)peek(tilYOffset);
+	
+	for(byte id;id<8;id++) {
+		if (rats[id].X!=-1) {
+			posX = rats[id].X - pixelXOfs;
+			posY = rats[id].Y - pixelYOfs;
+
+			if (posX>=0 && posX<=900 && posY>=0 && posY<=600)
+				sprPos(rats[id].sprId,posX,posY);
+		}
+	}
+	
+}
+
+void ratsSetMapPos(byte id,int x,int y,bool willMove) {
+	int ofsMapX;
+	int ofsMapY;
+	int posX;
+	int posY;
+	
+	rats[id].mapX=x;
+	rats[id].mapY=y;
+	rats[id].willMove=willMove;
+
+	posX = ((x+9)*32);
+	posY = ((y+5)*32);
+	
+	rats[id].X=posX;
+	rats[id].Y=posY;
+
+	ofsMapX = _tsTileOffsetX-8;
+	ofsMapY = _tsTileOffsetY-24;
+	
+	posX = posX - (ofsMapX*32)+48-6;
+	posY = posY - (ofsMapY*32)+42-6;
+
+	rats[id].moveCnt=0;
+	rats[id].noDir=255;
+	rats[id].starRotate=0;
+
+	mapShowRat(id);
+}
+
+void ratsResetPos() {
+	for(byte i=0;i<8;i++) {
+		if (rats[i].mapX!=-1)
+			ratsSetMapPos(i,rats[i].mapX,rats[i].mapY,rats[i].willMove);
+		sprPos(rats[i].sprId,0,0);
+	}
+}
+
+void ratsMove(byte id,byte dir) {
+	byte c;
+	if (rats[id].moveCnt!=0) return;
+
+	mapShowRat(id);
+	
+	rats[id].nextMapX=rats[id].mapX;
+	rats[id].nextMapY=rats[id].mapY;
+	rats[id].moveCnt=32;
+	
+	if (dir == 0 && rats[id].mapY>0) { // up
+		rats[id].nextMapY--;
+		sprRef(rats[id].sprId,2);
+		sprFlip(rats[id].sprId,false,false);
+	} else if (dir == 1 && rats[id].mapX<31) {// right
+		rats[id].nextMapX++;
+		sprRef(rats[id].sprId,3);
+		sprFlip(rats[id].sprId,false,false);
+	} else if (dir == 2 && rats[id].mapY<55) { // down
+		rats[id].nextMapY++;
+		sprRef(rats[id].sprId,2);
+		sprFlip(rats[id].sprId,false,true);
+	} else if (dir == 3 && rats[id].mapX>0) { // left
+		rats[id].nextMapX--;
+		sprRef(rats[id].sprId,3);
+		sprFlip(rats[id].sprId,true,false);
+	}
+	else rats[id].moveCnt=0;
+}
+
+
+
+void ratsStart() {
+	for (byte id=0;id<8;id++)
+		mapRemoveRat(id);
+
+	ratsInit();
+	if (numRats>=1) 
+		ratsSetMapPos(0,13,54,willMove);
+	if (numRats>=2) 
+		ratsSetMapPos(1,15,54,willMove);
+	if (numRats>=3) 
+		ratsSetMapPos(2,17,54,willMove);
+	if (numRats>=4) 
+		ratsSetMapPos(3,11,54,willMove);
+	if (numRats>=5) 
+		ratsSetMapPos(4,19,54,willMove);
+	if (numRats>=6) 
+		ratsSetMapPos(5,0,0,willMove);
+	if (numRats>=7) 
+		ratsSetMapPos(6,31,55,willMove);
+	if (numRats>=8) 
+		ratsSetMapPos(7,31,0,willMove);	
+}
+
+// Determine the direction the rats should take
+void _ratsChase(byte id) {
+int playerMapX;
+int playerMapY;
+int x;
+int y;
+nat a;
+nat addr[4];
+byte dirFree;
+byte dirStart;
+byte dir;
+byte i;
+
+	if(rats[id].mapX==-1 || !rats[id].willMove || rats[id].moveCnt!=0)
+		return;
+
+	playerMapX=_tsTileOffsetX-8;
+	playerMapY=_tsTileOffsetY-24;
+
+	x=rats[id].mapX;
+	y=rats[id].mapY;
+
+	a=(nat)(_tsMapAddr+(yoffs+y)*64+xoffs+x);
+
+	addr[0]=a-64;
+	addr[1]=a+1;
+	addr[2]=a+64;
+	addr[3]=a-1;
+
+	dirFree=0;
+
+	for(dir=0;dir<4;dir++) {
+		// Rats can also run over cats, rocks, etc.
+		i=peek(addr[dir],_tsMapPage);
+		if(i==0 || i>=22)
+			dirFree|=(byte)(1<<dir);
+	}
+
+	dirStart=rnd(0,3);
+
+	// First: trying to be closest from the player
+	for(i=0;i<4;i++) {
+		dir=(dirStart+i)&3;
+
+		if(dir==rats[id].noDir)
+			continue;
+
+		if((dirFree&(byte)(1<<dir))==0)
+			continue;
+		
+		if (reverseChase<_time) {
+			if((dir==0 && y<=playerMapY) ||
+			(dir==1 && x>=playerMapX) ||
+			(dir==2 && y>=playerMapY) ||
+			(dir==3 && x<=playerMapX))
+				continue;
+		} else {
+			if((dir==0 && y>playerMapY) ||
+			(dir==1 && x<playerMapX) ||
+			(dir==2 && y<playerMapY) ||
+			(dir==3 && x>playerMapX))
+				continue;			
+		}
+
+		ratsMove(id,dir);
+		rats[id].noDir=dir+2;
+		if(rats[id].noDir>3)
+			rats[id].noDir-=4;
+		break;
+	}
+
+	if(i<4)
+		return;
+
+	// Trying other directions (except going back)
+	for(i=0;i<4;i++) {
+		dir=(dirStart+i)&3;
+
+		if(dir==rats[id].noDir)
+			continue;
+
+		if(dirFree&(byte)(1<<dir)) {
+			ratsMove(id,dir);
+			rats[id].noDir=dir+2;
+			if(rats[id].noDir>3)
+				rats[id].noDir-=4;
+			break;
+		}
+	}
+
+	if(i<4)
+		return;
+
+	// Go back if possible (should be)
+	dir=rats[id].noDir;
+	if(dirFree&(byte)(1<<dir)) {
+		ratsMove(id,dir);
+		rats[id].noDir=dir+2;
+		if(rats[id].noDir>3)
+			rats[id].noDir-=4;
+	}
+}
+
+
+void ratsLoop() {
+byte id;
+
+	for(id=0;id<8;id++) {
+		if (rats[id].moveCnt>0) {
+			
+			if(rats[id].moveCnt<15 && rats[id].starRotate<_time && isSprTile(rats[id].sprId,28,false)) {
+				rats[id].starRotate=_time+rnd(5,15);
+				rats[id].starStep=0;
+			}
+
+			if(rats[id].starRotate>_time) {
+				if (rats[id].starStep==10) {
+					sprRef(rats[id].sprId,2);
+					sprFlip(rats[id].sprId,false,false);
+				} else if (rats[id].starStep==20) {
+					sprRef(rats[id].sprId,3);
+					sprFlip(rats[id].sprId,false,false);
+				} else if (rats[id].starStep==30) {
+					sprRef(rats[id].sprId,2);
+					sprFlip(rats[id].sprId,false,true);
+				} else if (rats[id].starStep==40) {
+					sprRef(rats[id].sprId,3);
+					sprFlip(rats[id].sprId,true,false);
+				}
+				if (rats[id].starStep==40) rats[id].starStep=0;
+				else rats[id].starStep++;
+				continue;
+			}
+			
+			
+			rats[id].moveCnt-=ratSpeed;
+			if (rats[id].nextMapX>rats[id].mapX)
+				rats[id].X+=ratSpeed;
+			else if (rats[id].nextMapX<rats[id].mapX)
+				rats[id].X-=ratSpeed;
+			else if (rats[id].nextMapY<rats[id].mapY)
+				rats[id].Y-=ratSpeed;
+			else if (rats[id].nextMapY>rats[id].mapY)
+				rats[id].Y+=ratSpeed;
+			if (rats[id].moveCnt<=0) {
+				rats[id].moveCnt=0;
+				rats[id].mapX=rats[id].nextMapX;
+				rats[id].mapY=rats[id].nextMapY;
+				_ratsChase(id);
+			} else continue;
+		} else
+			_ratsChase(id);
+	}
+	_ratsDisplay();
+}
+
+
+//// Misc app functions ////
+
+void displayInfo() {
+int t;
+byte div;
+nat ms;
+	if (score>hiscore) hiscore=score;
+
+	int2Txt(hiscore,5);
+	curPos(60,3);
+	print("2Hi-Score: c",i2t);
+	int2Txt(score,5);
+	curPos(60,5);
+	print("2Score: c",i2t);
+
+	t=(int)(timer-_time);
+	curPos(60,7);
+	print("2Timer: ");	
+	ms = (nat)(t/60);
+	print("c",ms,":");
+	ms = (nat)(t - (ms*60));
+	int2Txt(ms,2);
+	print(i2t);		
+	
+	curPos(60,8);
+	print("eb7b....cb7b....9b7");
+	curPos(60,9);
+	t=(t/((playTime+11/2)/11))+1;
+	
+	if (t<0) t=0;
+	print("d0");
+	for(div=0;div<t;div++)
+		print("”");
+	print("0");
+	for(;div<12;div++)
+		print(" ");
+	
+	curPos(60,11);
+	print("2Next meal:d ",nextPoints);
+
+	curPos(59,37);
+	print("2Round: c");
+	int2Txt(level,2);
+	print(i2t);		
+	
+	curPos(70,37);	
+	print("2Lives: c",lives);
+
+}
+
+void alert(text m1,text m2, byte x1,byte x2) {	
+	curPos(16,13);
+	print("e0¬­");
+	for (byte i=14;i<=17;i++) {
+		curPos(16,i);
+		print("e0€d                        0€");
+	}
+	curPos(16,18);
+	print("e«ª");
+	curPos(17+x1,15);
+	print("2d",m1);
+	curPos(17+x2,16);
+	print("2d",m2);
+	
+	sleep(3000);
+	curPos(16,13);
+	
+	for (byte i=13;i<=18;i++) {
+		curPos(16,i);
+		print("0                          ");
+	}
+}
+
+
+void showMessageLevel() {
+	if (willMove==false) {
+		alert("BONUS STAGE","Ready!",6,9);	
+	} else {
+		txt="ROUND ";
+		int2Txt(level,2);
+		concat(txt,i2t);
+		alert(txt,"Ready!",8,9);	
+
+	}
+}
+
+void showPoints(nat pt,nat pause) {
+	curPos(29,15);
+	print("2e ",pt," ");
+	sleep(pause);
+	curPos(29,15);
+	print("        ");
+}
+
+void clearPlayerTile() {
+	nat a;
+	a=(nat)(_tsMapAddr+(_tsTileOffsetY+4)*64+_tsTileOffsetX+7);	
+	poke(a,0,_tsMapPage);
+	_tsUpdate=true;
+}
+
+void initLevel() {
+	// Here you can chage the parameters of the different levels.
+	// You can also add levels
+	numCheeseCatch=0;
+	reverseChase=0;
+	if (level==1) {
+		playTime=120;
+		bonusTime=30;
+		numCats=3;
+		numCheese=5;
+		numRock=2;
+		numDollar=1;
+		numRats=3;
+		ratSpeed=2;
+		playerSpeed=4;
+		willMove=true;
+		drawMap=true;
+		showCats=true;
+		showCheese=true;
+		return;
+	} else if (level==2) {
+		playTime=120;
+		bonusTime=25;
+		numCats=4;
+		numCheese=5;
+		numRock=3;
+		numDollar=2;
+		numRats=3;
+		ratSpeed=2;
+		playerSpeed=4;
+		willMove=true;
+		drawMap=false;
+		showCats=true;
+		showCheese=true;
+		return;
+	} else if (level==3) {
+		playTime=60;
+		numCats=8;
+		numCheese=15;
+		numRock=5;
+		numDollar=0;
+		numRats=5;
+		ratSpeed=2;
+		playerSpeed=4;
+		willMove=false; // Bonus stage when willMoce is false
+		drawMap=false;
+		showCats=false;
+		showCheese=true;
+		return;
+	} else if (level==4) {
+		playTime=120;
+		bonusTime=20;		
+		numCats=5;
+		numCheese=7;
+		numRock=5;
+		numDollar=2;
+		numRats=5;
+		ratSpeed=2;
+		playerSpeed=4;
+		willMove=true;
+		drawMap=false;
+		showCats=false;
+		showCheese=true;
+		return;
+	} else if (level==5) {
+		playTime=120;
+		bonusTime=15;
+		numCats=5;
+		numCheese=7;
+		numRock=8;
+		numDollar=2;
+		numRats=6;
+		ratSpeed=4;
+		playerSpeed=4;
+		willMove=true;
+		drawMap=false;
+		showCats=false;
+		showCheese=true;
+		return;
+	} else if (level==6) {
+		playTime=120;
+		bonusTime=10;
+		numCats=5;
+		numCheese=7;
+		numRock=8;
+		numDollar=4;
+		numRats=1;
+		ratSpeed=6;
+		playerSpeed=4;
+		willMove=true;
+		drawMap=false;
+		showCats=false;
+		showCheese=true;
+		return;
+	} else if (level>=7) {
+		playTime=120;
+		bonusTime=10;		
+		numCats=8;
+		numCheese=7;
+		numRock=8;
+		numDollar=2;
+		numRats=3;
+		ratSpeed=6;
+		playerSpeed=4;
+		willMove=true;
+		drawMap=false;
+		showCats=false;
+		showCheese=true;
+		return;
+	}
+}
+
+void initPlayer() {
+	sprRef(31,0);
+	sprPal(31,0);
+	sprPos(31,(9*32)-6+48,(5*32)-6+42);// Tile pos : X=9 Y=5 - map Pos 13/49
+	sprFlip(31,false,false);	
+}
+
+void _snd_onoff(bool b) {
+	if (!b || noMusic) {
+		ymNoteOff(0);
+		ymNoteOff(1);
+		_snd_on=false;
+	} else _snd_on=true;
+
+}
+
+void soundBeep(byte typ){
+byte n1;
+byte n2;
+	if (noMusic) return;
+	if (typ==0) {
+		n1=90;
+		n2=97;
+	} else if (typ==1) {
+		n1=97;
+		n2=90;
+	} else {
+		n1=120;
+		n2=100;
+	}
+	
+	_snd_onoff(false);
+	synNoteOff(1);
+	synVoice(1,1,4,0b11,15); 
+	synEnv(1,1,2,0,2);
+	synNoteOn(1,n1,120);
+	clkSet();
+	while(_mSec<70){}
+	synNoteOff(1);
+	synNoteOn(1,n2,120);
+	clkSet();
+	while(_mSec<70){}
+	synVoice(1,1,5,0b11,10); 
+	synEnv(1,0,5,9,15);
+	_snd_onoff(true);
+}
+
+void soundBeep2(){
+	if (noMusic) return;
+	_snd_onoff(false);
+	synNoteOff(1);
+	synVoice(1,1,4,0b11,15); 
+	synEnv(1,1,2,0,2);
+	synNoteOn(1,90,120);
+	clkSet();
+	while(_mSec<70){}
+	synNoteOff(1);
+	synNoteOn(1,97,120);
+	clkSet();
+	while(_mSec<70){}
+	synVoice(1,1,5,0b11,10); 
+	synEnv(1,0,5,9,15);
+	_snd_onoff(true);
+}
+
+void pause() {
+	if (_keyDwn == 66) {
+		_snd_onoff(false);
+		sleep(300);
+		while(_keyDwn==0) {}
+		_snd_onoff(true);
+		sleep(150);
+	}
+}
+
+/////////////////////////////////////////
+////////////////////////////////////////
+
+void main() {
+byte lastMove;
+byte lastMoveOk;
+byte cptMove;
+byte c;
+byte tick;
+bool stop;
+bool noStar;
+nat n;
+
+	import("/system/reginit.dat",0x1100,0);
+	poke(gfxModes,0); 
+	vCount(1);
+
+	clearSprites();
+	clearTiles();
+	clearTileSet();
+	clearBitMap();
+
+	byte oldR=peek(0x2f13);
+	byte oldG=peek(0x2f14);
+	byte oldB=peek(0x2f15);
+	poke(0x2f13,0);
+	poke(0x2f14,0);
+	poke(0x2f15,0);
+	poke(statusReg,peek(0x2f0b)&0b01111111); 
+
+	cls();
+	poke(gfxModes,0b00010000);
+	curPos(0,0);
+	print("2CHARSET REDEFINITION. Please wait...");
+
+
+	importFont("res/C64.FNT",0,60,0x20);
+	importFont("res/C64.FNT",61,26,0x61);
+
+
+	cls();
+	poke(gfxModes,0);
+
+	import("res/spr.spr",cpuWindow,5120,sprPage);
+	import("res/spr.pla",sprPlaA,48);
+	
+
+	noMusic=false;
+	
+	while(true) {
+		/////////////////////////
+		////// Main Loop
+		/////////////////////////
+
+		// New Game -  Display the title screen
+		
+		poke(gfxModes,0); 
+		cls();
+		ymNoteOff(0);
+		ymNoteOff(1);
+		synNoteOff(0);
+		synNoteOff(1);
+		_snd_setupSound();
+		_snd_bar=_snd_song[0];
+		
+		import("res/ratxacc.bmp",cpuWindow,48000,bmpPageA);
+		import("res/ratxacc.pal",0x11a0,48);
+
+		curPos(11,8);
+		print("2Based on the game 'Radar Rat Race' (1982) for Commodore 64");
+		curPos(12,38);
+		print("7Jean-arthur Silve - Music by Benoit Saint-Moulin - 2026");
+		curPos(28,39);
+		print("bPress Fire(A) to start!");
+		poke(gfxModes,0b00010001);
+		
+		
+		while((_padLft & 0b00000001)==0) {if(_keyDwn==12) break;}
+		if(_keyDwn==12) break;
+		
+		poke(gfxModes,0); 
+
+		score=0;
+		lives=5;
+		level=1;
+
+		// Display the game's background image.
+		// Only colors 7 through 15 can be displayed over the tiles
+		import("res/ratxbg2.bmp",cpuWindow,48000,bmpPageA);
+		import("res/ratxbg2.pal",0x11a0,48);
+		
+		while(true) {
+			// New level
+			poke(gfxModes,0); 
+			cls();
+			curPos(25,38);
+			print("b P 2Pause ");
+			curPos(25,39);
+			print("b S 2Sound on/off ");
+
+			_snd_onoff(false);
+			
+			nextPoints=100;		
+			lastPlMapX=10000;
+						
+			initLevel();
+			timer=_time+playTime;
+			starInit();
+			
+			// Initialize scrolling functions
+			// LVL file has been made with MAPED tool
+			tsInit(15,13,2,1,"RES/LABYTILE","RES/LABYTILE.LVL",cpuWindow,0x8f);
+			setElements(0);
+			setElements(1);
+			setElements(2);
+			setElements(3);
+
+			// Display the map with an offset
+			tsDisplay(23,73);	
+			mapDrawRadar();
+			ratsStart();
+
+			poke(gfxModes,0b10011101); //enable sprites tiles and text
+
+			initPlayer();
+			mapShowPlayer();
+
+			cptMove=0;
+			lastMove=255;
+			lastMoveOk=255;
+			noMove=255;
+
+			noStar=false;
+			numCheeseCatch=0;
+			tick=0;
+			
+			stop=false;
+			_snd_onoff(true);
+			ratsLoop();
+			displayInfo();
+			sprUpdt();
+			showMessageLevel();
+			
+			while(!stop) {
+								
+				_snd_play();	// Should be called as often as possible
+								
+				if (noStar && _mSec>200)
+					noStar=false;
+				
+				if (tick==0) {
+					displayInfo();
+					n = reverseChase-_time;
+					// LED blinking, for fun!
+					if (n==0 || n==4 || n==2) {
+						poke(0x117e,4);
+						poke(0x118e,0);
+						poke(0x119e,0);
+						poke(0x117c,7);
+						poke(0x118c,4);
+						poke(0x119c,0);
+						led(255,255,255);
+					} else if (n==1 || n==3 || n==5) {
+						poke(0x117e,0);
+						poke(0x118e,0);
+						poke(0x119e,0);
+						poke(0x117c,5);
+						poke(0x118c,1);
+						poke(0x119c,7);
+						led(255,0,255);
+					}
+					starLoop();
+				}
+				tick++;
+				if (tick==10) tick=0;
+			
+				ratsLoop();
+						
+				if (_keyDwn==12) break; // Exit program?
+				if (_keyDwn==32) {		// Disable sound?
+					noMusic=!noMusic;
+					_snd_onoff(!noMusic);
+					sleep(300);
+				}
+
+				pause(); // Pause?
+				
+				if (cptMove>0) { // Player is still moving from a tile to another (in fact, map is scrolling, sprite player is pot moving)
+					tsScroll(lastMove,playerSpeed);
+					cptMove--;
+					if (cptMove==0) // The move is over
+						mapShowPlayer();
+				} else {		
+					if (_padLft & 0b00000001 && noStar==false) { // Fire A:star screen
+						clkSet();
+						noStar=true;
+						starPut();
+						timer-=5;
+						if(timer<0) timer=0;
+					}
+					
+					lastMove=255;
+					c=255;
+					if (noMove!=255 && lastMoveOk!=255) {
+						//If player turns before reaching the corner,
+						//continue moving in the previous direction (once)
+						if (lastMoveOk==0 && (noMove==1 || noMove==3)) {
+							c=0;
+						} else if (lastMoveOk==1 && (noMove==0 || noMove==2)) {
+							c=1;
+						} else if (lastMoveOk==2 && (noMove==1 || noMove==3)) {
+							c=2;
+						} else if (lastMoveOk==3 && (noMove==2 || noMove==0)) {
+							c=3;
+						}
+						lastMoveOk=255;
+					}
+					
+					if (c==255) 
+						c=getPadDirection(_padLft);
+					
+					if (noMove!=1 && c==1 ) { // Right
+						lastMove=1;
+						sprRef(31,1);
+						sprFlip(31,false,false);
+					} else if (noMove!=3 && c==3) { // Left
+						lastMove=3;
+						sprRef(31,1);
+						sprFlip(31,true,false);
+					} else if (noMove!=2 && c==2) { // Down
+						lastMove=2;
+						sprRef(31,0);
+						sprFlip(31,false,true);
+					} else if (noMove!=0 && c==0) { // Up
+						lastMove=0;
+						sprRef(31,0);
+						sprFlip(31,false,false);
+					}
+
+					if (lastMove!=255) {
+						noMove=255;
+						cptMove=32/playerSpeed;
+					}
+				}
+					
+				vSync();
+				// Do the buuffer swap and change tile offset
+				// Even when performed immediately after vSync, it's still not perfect.
+				tsVSync(); 
+				sprUpdt();
+
+				// Better for speed perforance than a loop
+				if (isSprTile(31,1,false) ||
+				isSprTile(31,2,false) ||
+				isSprTile(31,3,false) ||
+				isSprTile(31,4,false) ||
+				isSprTile(31,5,false) ||
+				isSprTile(31,6,false) ||
+				isSprTile(31,7,false) ||
+				isSprTile(31,8,false) ||
+				isSprTile(31,9,false) ||
+				isSprTile(31,10,false) ||
+				isSprTile(31,11,false) ||
+				isSprTile(31,12,false) ||
+				isSprTile(31,13,false) ||
+				isSprTile(31,14,false) ||
+				isSprTile(31,15,false) ||
+				isSprTile(31,16,false) ||
+				isSprTile(31,17,false) ||
+				isSprTile(31,18,false) ||
+				isSprTile(31,19,false) ||
+				isSprTile(31,20,false) ||
+				isSprTile(31,21,false) ||
+				isSprTile(31,22,false) ) {
+
+					// Player touch a wall or border:reverse scrolling
+					noMove=lastMove; // We record this move to not repeat it right now
+					if (lastMove==1) lastMove=3;
+					else if (lastMove==3) lastMove=1;
+					else if (lastMove==2) lastMove=0;
+					else if (lastMove==0) lastMove=2;
+					tsScroll(lastMove,playerSpeed);
+					tsVSync();
+					cptMove=0;
+				} else {
+					lastMoveOk=lastMove;
+					c=sprOther(31,0);
+					if (c<=7) { // Rat
+						if (reverseChase<_time) {	
+							// Rat caught the player
+							lives--;
+							sprRef(31,7);
+							sprFlip(31,false,false);
+							sprUpdt();
+							soundBeep(2);							
+							sleep(1000);
+							sprRef(31,0);
+							
+							if (lives==0 || willMove==false) // Bonus stage:don't play it again
+								stop=true;
+							else {
+								timer=_time+playTime;
+								tsDisplay(23,73);
+								ratsStart();
+								initPlayer();
+								mapShowPlayer();
+								ratsLoop();
+								sprUpdt();
+								showMessageLevel();
+							}
+							tsVSync();
+						} else {
+							// Player had caught a bonus and can "eat" the rat
+							soundBeep(1);
+							score+=500;
+							sprRef(c,4);
+							sprUpdt();
+							showPoints(500,500);
+							sprRef(c,2);
+							ratsSetMapPos(c,13,54,willMove);
+							sprPos(c,0,0);
+						}
+					} else if (isSprTile(31,23,false)) { // Dollar
+						if (cptMove==0) {
+							soundBeep(0);
+							score+=1000;
+							showPoints(1000,500);
+							reverseChase=_time+bonusTime;
+							poke(0x117e,7);
+							poke(0x118e,7);
+							poke(0x119e,7);
+							poke(0x117c,5);
+							poke(0x118c,1);
+							poke(0x119c,7);
+							clearPlayerTile();
+							mapRemove(_tsTileOffsetX-8,_tsTileOffsetY-24);			
+							led(255,0,255);
+							tsVSync();
+						}
+					} else if (isSprTile(31,24,false)) { // Cheese
+						if (cptMove==0) {
+							soundBeep(0);
+							numCheeseCatch++;
+							score+=nextPoints;
+							showPoints(nextPoints,500);
+							nextPoints+=100;
+							clearPlayerTile();
+							mapRemove(_tsTileOffsetX-8,_tsTileOffsetY-24);
+							tsVSync();
+							
+						}
+					} else if (isSprTile(31,25,false)) { // Cheese X2
+						if (cptMove==0) {	
+							soundBeep(0);
+							numCheeseCatch++;
+							score+=nextPoints*2;
+							showPoints(nextPoints*2,500);
+							nextPoints+=100;
+							clearPlayerTile();
+							mapRemove(_tsTileOffsetX-8,_tsTileOffsetY-24);		
+							tsVSync();
+						}
+					} else if (isSprTile(31,26,false)) { // Cheese X4
+						if (cptMove==0) {				
+							soundBeep(0);
+							numCheeseCatch++;
+							score+=nextPoints*4;
+							showPoints(nextPoints*4,500);
+							clearPlayerTile();
+							mapRemove(_tsTileOffsetX-8,_tsTileOffsetY-24);
+							tsVSync();
+						}
+					} else if (timer<=_time || isSprTile(31,27,false)) { // Cat
+						if (cptMove==0) {				
+							lives--;
+							sprRef(31,7);
+							sprFlip(31,false,false);
+							sprUpdt();
+							soundBeep(2);
+							sleep(1500);
+							sprRef(31,0);
+							if (lives==0 || willMove==false) // Bonus stage:don't play it again
+								stop=true;
+							else {
+								timer=_time+playTime;
+								tsDisplay(23,73);
+								ratsStart();
+								initPlayer();
+								mapShowPlayer();
+								ratsLoop();
+								sprUpdt();
+								showMessageLevel();
+							}
+							tsVSync();
+						}
+					}
+					if (numCheeseCatch==numCheese) {	
+						// All cheeses grabbed
+						stop=true;
+					}
+				}
+			}
+			if (lives==0) break;
+			
+			// Next level
+			level++;
+			if (_keyDwn==12) break;		
+		}
+		if (_keyDwn==12) break;		
+	}
+	// Exiting
+
+	clearSprites();
+	clearBitMap();	
+	cls();
+
+	ymNoteOff(0);
+	ymNoteOff(1);
+	synNoteOff(0);
+	synNoteOff(1);
+			
+	import("/system/reginit.dat",0x1100,0);
+	
+	poke(0x2f13,oldR);
+	poke(0x2f14,oldG);
+	poke(0x2f15,oldB);
+	print("d                  e6e7e8e9eaebec93eeef");
+	print("1Thanks for using  df6f7f8f9fafbfcfdfeff 1computer!");
+	
+	led(255,255,255);
+	poke(gfxModes,0b00010000); //enable text
+}
+
+// Run the game
+main();
