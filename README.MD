@@ -1,4 +1,4 @@
-![RAT-X — A new game for Micro-8](images/rat-x.png)
+![RAT-X — A new game for Micro-8](https://raw.githubusercontent.com/ludosevilla/RATX-X/refs/heads/main/img/boite2.png)
 
 [🇫🇷 Version française](#version-française)
 
